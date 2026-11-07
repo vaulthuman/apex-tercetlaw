@@ -1,0 +1,48 @@
+name: Build apex redirects
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build one redirect page per live page on www
+        run: |
+          set -e
+          HOST=$(tr -d '[:space:]' < CNAME); TARGET="https://www.$HOST"
+          rm -rf _site; mkdir -p _site; cp index.html 404.html CNAME _site/
+          curl -fsS "$TARGET/sitemap.xml" | grep -o '<loc>[^<]*' | sed "s#<loc>$TARGET##" > paths.txt
+          for p in /start/ /thanks/ /life-coach/ /welcome/ /probate/ /services/ /contact/; do
+            if ! grep -qx "$p" paths.txt && [ "$(curl -s -o /dev/null -w '%{http_code}' "$TARGET$p")" = "200" ]; then echo "$p" >> paths.txt; fi
+          done
+          n=0
+          while read -r p; do
+            if [ -z "$p" ] || [ "$p" = "/" ]; then continue; fi
+            d="_site${p%/}"; mkdir -p "$d"; u="$TARGET$p"
+            printf '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Moved</title><link rel="canonical" href="%s"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0; url=%s"><script>location.replace("%s"+location.search+location.hash)</script></head><body><p><a href="%s">Continue</a></p></body></html>\n' "$u" "$u" "$u" "$u" > "$d/index.html"
+            n=$((n+1))
+          done < paths.txt
+          echo "stubs: $n"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
